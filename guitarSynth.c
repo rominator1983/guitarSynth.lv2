@@ -22,8 +22,12 @@ typedef struct
    float *output;
    float rising;
    float lastOutputValue;
+   float lastInputValue;
    float lastWaveLoudness;
-   float thisWaveLoudness;
+   float lastWaveLoudness2;
+   double thisWaveLoudness;
+   unsigned long samplesSinceLastWave;
+   float rateAndGainCompensation;
 } GuitarSynthState;
 
 static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
@@ -36,7 +40,10 @@ static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
    guitarSynthState->rising = 0.0f;
    guitarSynthState->lastOutputValue = 0.0f;
    guitarSynthState->lastWaveLoudness = 0.0f;
+   guitarSynthState->lastWaveLoudness2 = 0.0f;
    guitarSynthState->thisWaveLoudness = 0.0f;
+   guitarSynthState->samplesSinceLastWave = 0;
+   guitarSynthState->rateAndGainCompensation = 0.1f * (48000.0f / (float)rate);
 
    return (LV2_Handle)guitarSynthState;
 }
@@ -64,54 +71,71 @@ static void activate(LV2_Handle instance)
   GuitarSynthState *guitarSynthState = (GuitarSynthState *)instance;
 }
 
+static float calcMultiplicator(GuitarSynthState *guitarSynthState);
+
 static void run(LV2_Handle instance, uint32_t n_samples)
 {
+   printf("guitarSynth run called with %u samples\n", n_samples);
+
    GuitarSynthState *guitarSynthState = (GuitarSynthState *)instance;
 
    const float *const input = guitarSynthState->input;
    float *const output = guitarSynthState->output;
 
-   // TODO: magic value. maybe find other range for gain, also this should be dependent on frame rate.
-   float multiplicator = *(guitarSynthState->gain) * 0.001f;
-   // TODO: This does not work
-   //float multiplicator = *(guitarSynthState->gain) * guitarSynthState->lastWaveLoudness;
-   
    // TODO: add square wave function output based on a new mode. This should also be based on input loudness.
    
-   // TODO: add additional multiplication for the output based on input loudness value.
-   //   Consider how the loudness of the input is calculated. At first just use max/min value of period.
-   //   Maybe add a second mode for describing how loudness is calculated.
+   // TODO: Maybe add a second mode for describing how loudness is calculated. Use some form of RMS?
    //   Do this based on a new mode. That determines wether to do this.
    //   If this is not done, the output will be constant maximum noise. This is basically how VCOs work anyhow.
 
+   float multiplicator = calcMultiplicator(guitarSynthState);
+   
    // kind of saw-tooth for upper/lower
    for (uint32_t pos = 0; pos < n_samples; pos++)
    {
-      guitarSynthState->rising = input[pos] >= 0.0 ? multiplicator : -multiplicator;
-
-      if ((guitarSynthState->lastOutputValue >= 0.0 && guitarSynthState->rising < 0.0) ||
-          (guitarSynthState->lastOutputValue < 0.0 && guitarSynthState->rising > 0.0))
+      guitarSynthState->rising = input[pos] >= 0.0 ? multiplicator : (-multiplicator);
+      
+      float absInputValue = 
+         input[pos] >= 0.0f 
+            ? input[pos]
+            : input[pos] * -1.0f;
+      
+      if ((guitarSynthState->lastInputValue >= 0.0 && guitarSynthState->rising <= 0.0) ||
+      (guitarSynthState->lastInputValue <= 0.0 && guitarSynthState->rising >= 0.0))
       {
          guitarSynthState->lastOutputValue = 0.0f;
-         guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness;
-         guitarSynthState->thisWaveLoudness = 0.0;
-      }
-      else  
-      {
-         guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
-         float absInputValue = 
-            input[pos] > 0.0f 
-               ? input[pos]
-               : -input[pos];
+         guitarSynthState->lastWaveLoudness2 = guitarSynthState->lastWaveLoudness;
+         guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave + 1);
+         // NOTE: calculation of loudness based on max value instead of average
          
-         guitarSynthState->thisWaveLoudness = 
-            absInputValue > guitarSynthState->thisWaveLoudness 
-               ? absInputValue 
-               : guitarSynthState->thisWaveLoudness;
+         // guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness;
+         guitarSynthState->thisWaveLoudness = 0.0f;
+         guitarSynthState->samplesSinceLastWave = 0;
+         
+         multiplicator = calcMultiplicator(guitarSynthState);
+      }
+      else
+      {
+         guitarSynthState->samplesSinceLastWave++;
+         guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
       }
       
+      // NOTE: calculation of loudness based on max value instead of average
+      // guitarSynthState->thisWaveLoudness = 
+      //    absInputValue > guitarSynthState->thisWaveLoudness
+      //       ? absInputValue 
+      //       : guitarSynthState->thisWaveLoudness;
+      
+      guitarSynthState->thisWaveLoudness = guitarSynthState->thisWaveLoudness + (double)absInputValue;
+
       output[pos] = guitarSynthState->lastOutputValue;
+      guitarSynthState->lastInputValue = input[pos];
    }
+}
+
+float calcMultiplicator(GuitarSynthState *guitarSynthState)
+{
+   return *(guitarSynthState->gain) * ((guitarSynthState->lastWaveLoudness + guitarSynthState->lastWaveLoudness2) / 2) * guitarSynthState->rateAndGainCompensation;
 }
 
 static void deactivate(LV2_Handle instance)
