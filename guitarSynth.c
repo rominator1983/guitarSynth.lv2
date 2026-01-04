@@ -10,21 +10,22 @@
 typedef enum
 {
    GAIN = 0,
-   INPUT = 1,
-   OUTPUT = 2
+   THRESHOLD = 1,
+   INPUT = 2,
+   OUTPUT = 3
 } PortIndex;
 
 typedef struct
 {
    // Port buffers
    const float *gain;
+   const float *threshold;
    const float *input;
    float *output;
    float rising;
    float lastOutputValue;
    float lastInputValue;
    float lastWaveLoudness;
-   float lastWaveLoudness2;
    double thisWaveLoudness;
    unsigned long samplesSinceLastWave;
    float rateAndGainCompensation;
@@ -40,7 +41,6 @@ static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
    guitarSynthState->rising = 0.0f;
    guitarSynthState->lastOutputValue = 0.0f;
    guitarSynthState->lastWaveLoudness = 0.0f;
-   guitarSynthState->lastWaveLoudness2 = 0.0f;
    guitarSynthState->thisWaveLoudness = 0.0f;
    guitarSynthState->samplesSinceLastWave = 0;
    guitarSynthState->rateAndGainCompensation = 0.1f * (48000.0f / (float)rate);
@@ -54,15 +54,18 @@ static void connect_port(LV2_Handle instance, uint32_t port, void *data)
 
    switch ((PortIndex)port)
    {
-   case GAIN:
-      guitarSynthState->gain = (const float *)data;
-      break;
-   case INPUT:
-      guitarSynthState->input = (const float *)data;
-      break;
-   case OUTPUT:
-      guitarSynthState->output = (float *)data;
-      break;
+      case GAIN:
+         guitarSynthState->gain = (const float *)data;
+         break;
+      case THRESHOLD:
+         guitarSynthState->threshold = (const float *)data;
+         break;
+      case INPUT:
+         guitarSynthState->input = (const float *)data;
+         break;
+      case OUTPUT:
+         guitarSynthState->output = (float *)data;
+         break;
    }
 }
 
@@ -75,8 +78,6 @@ static float calcMultiplicator(GuitarSynthState *guitarSynthState);
 
 static void run(LV2_Handle instance, uint32_t n_samples)
 {
-   printf("guitarSynth run called with %u samples\n", n_samples);
-
    GuitarSynthState *guitarSynthState = (GuitarSynthState *)instance;
 
    const float *const input = guitarSynthState->input;
@@ -104,11 +105,13 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       (guitarSynthState->lastInputValue <= 0.0 && guitarSynthState->rising >= 0.0))
       {
          guitarSynthState->lastOutputValue = 0.0f;
-         guitarSynthState->lastWaveLoudness2 = guitarSynthState->lastWaveLoudness;
-         guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave + 1);
-         // NOTE: calculation of loudness based on max value instead of average
          
+         // NOTE: calculation of loudness based on average
+         guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave + 1);
+         
+         // NOTE: calculation of loudness based on max value instead of average
          // guitarSynthState->lastWaveLoudness = guitarSynthState->thisWaveLoudness;
+         
          guitarSynthState->thisWaveLoudness = 0.0f;
          guitarSynthState->samplesSinceLastWave = 0;
          
@@ -126,6 +129,7 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       //       ? absInputValue 
       //       : guitarSynthState->thisWaveLoudness;
       
+      // NOTE: calculation of loudness based on average
       guitarSynthState->thisWaveLoudness = guitarSynthState->thisWaveLoudness + (double)absInputValue;
 
       output[pos] = guitarSynthState->lastOutputValue;
@@ -135,7 +139,14 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 
 float calcMultiplicator(GuitarSynthState *guitarSynthState)
 {
-   return *(guitarSynthState->gain) * ((guitarSynthState->lastWaveLoudness + guitarSynthState->lastWaveLoudness2) / 2) * guitarSynthState->rateAndGainCompensation;
+   if (guitarSynthState->lastWaveLoudness < (*guitarSynthState->threshold) &&
+       guitarSynthState->lastWaveLoudness > -(*guitarSynthState->threshold))
+   {
+      return 0.0f;
+   }
+
+   return *(guitarSynthState->gain) * 
+      guitarSynthState->lastWaveLoudness * guitarSynthState->rateAndGainCompensation;
 }
 
 static void deactivate(LV2_Handle instance)
