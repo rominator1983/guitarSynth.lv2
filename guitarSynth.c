@@ -120,7 +120,11 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       else
       {
          guitarSynthState->samplesSinceLastWave++;
-         guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
+
+         if (fabs(guitarSynthState->lastOutputValue) <  2.0f * fmax(guitarSynthState->thisWaveLoudness, guitarSynthState->lastWaveLoudness))
+         {
+            guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
+         }
       }
       
       // NOTE: calculation of loudness based on max value instead of average
@@ -139,11 +143,12 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 
 float calcMultiplicator(GuitarSynthState *guitarSynthState)
 {
-   if (guitarSynthState->lastWaveLoudness < (*guitarSynthState->threshold) &&
-       guitarSynthState->lastWaveLoudness > -(*guitarSynthState->threshold))
-   {
-      return 0.0f;
-   }
+   // TODO: remove threshold if not used.
+   // if (guitarSynthState->lastWaveLoudness < (*guitarSynthState->threshold) &&
+   //     guitarSynthState->lastWaveLoudness > -(*guitarSynthState->threshold))
+   // {
+   //    return 0.0f;
+   // }
 
    return *(guitarSynthState->gain) * 
       guitarSynthState->lastWaveLoudness * guitarSynthState->rateAndGainCompensation;
