@@ -96,10 +96,7 @@ static void run(LV2_Handle instance, uint32_t n_samples)
    {
       guitarSynthState->rising = input[pos] >= 0.0 ? multiplicator : (-multiplicator);
       
-      float absInputValue = 
-         input[pos] >= 0.0f 
-            ? input[pos]
-            : input[pos] * -1.0f;
+      float absInputValue = fabs(input[pos]);
       
       if ((guitarSynthState->lastInputValue >= 0.0 && guitarSynthState->rising <= 0.0) ||
       (guitarSynthState->lastInputValue <= 0.0 && guitarSynthState->rising >= 0.0))
@@ -121,7 +118,11 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       {
          guitarSynthState->samplesSinceLastWave++;
 
-         if (fabs(guitarSynthState->lastOutputValue) <  2.0f * fmax(guitarSynthState->thisWaveLoudness, guitarSynthState->lastWaveLoudness))
+         // TODO: improve variable definitions for stack/performance.
+         float currentLoudness = guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave + 1);
+
+         if (fabs(guitarSynthState->lastOutputValue) < 5.0f * *(guitarSynthState->gain) * 
+            fmax(currentLoudness, guitarSynthState->lastWaveLoudness))
          {
             guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
          }
@@ -143,7 +144,7 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 
 float calcMultiplicator(GuitarSynthState *guitarSynthState)
 {
-   // TODO: remove threshold if not used.
+   //TODO: remove threshold if not used.
    // if (guitarSynthState->lastWaveLoudness < (*guitarSynthState->threshold) &&
    //     guitarSynthState->lastWaveLoudness > -(*guitarSynthState->threshold))
    // {
