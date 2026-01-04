@@ -1,0 +1,13 @@
+@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<http://lv2plug.in/plugins/guitarSynth> a lv2:Plugin .
+
+<http://lv2plug.in/plugins/guitarSynth> lv2:binary <guitarSynth@LIB_EXT@> .
+
+<http://lv2plug.in/plugins/guitarSynth> rdfs:seeAlso <guitarSynth.ttl> .
+
+<http://lv2plug.in/plugins/guitarSynth>
+	a lv2:Plugin ;
+	lv2:binary <guitarSynth@LIB_EXT@>  ;
+	rdfs:seeAlso <guitarSynth.ttl> .
