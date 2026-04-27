@@ -41,7 +41,7 @@ static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
    guitarSynthState->lastOutputValue = 0.0f;
    guitarSynthState->thisWaveLoudness = 0.0f;
    guitarSynthState->samplesSinceLastWave = 0;
-   guitarSynthState->rateAndGainCompensation = 0.001f * (48000.0f / (float)rate);
+   guitarSynthState->rateAndGainCompensation = 0.01f * (48000.0f / (float)rate);
 
    return (LV2_Handle)guitarSynthState;
 }
@@ -87,12 +87,12 @@ static void run(LV2_Handle instance, uint32_t n_samples)
    //   Do this based on a new mode. That determines wether to do this.
    //   If this is not done, the output will be constant maximum noise. This is basically how VCOs work anyhow.
 
-   float multiplicator = calcMultiplicator(guitarSynthState);
    double maximum = 0.0;
 
    // kind of saw-tooth for upper/lower
    for (uint32_t pos = 0; pos < n_samples; pos++)
    {
+      float multiplicator = fmax(multiplicator, calcMultiplicator(guitarSynthState));
       guitarSynthState->rising = input[pos] >= 0.0 ? multiplicator : (-multiplicator);
       
       float absInputValue = fabs(input[pos]);
@@ -117,7 +117,7 @@ static void run(LV2_Handle instance, uint32_t n_samples)
             // guitarSynthState->lastOutputValue = maximum;
          }
          else 
-            guitarSynthState->lastOutputValue = guitarSynthState->lastOutputValue + guitarSynthState->rising;
+            guitarSynthState->lastOutputValue = fmax(-1.0, fmin(1.0, guitarSynthState->lastOutputValue + guitarSynthState->rising));
       }
 
       output[pos] = guitarSynthState->lastOutputValue;
@@ -128,8 +128,7 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 float calcMultiplicator(GuitarSynthState *guitarSynthState)
 {
    return *(guitarSynthState->gain) * 
-
-      //guitarSynthState->lastWaveLoudness * 
+      fabs(guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave)) * 
       guitarSynthState->rateAndGainCompensation;
 }
 
