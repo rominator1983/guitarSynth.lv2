@@ -102,8 +102,8 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       {
          if (guitarSynthState->lastOutputValue > 0.0f)
             guitarSynthState->lastOutputValue = -guitarSynthState->lastOutputValue;
-         else
-            guitarSynthState->lastOutputValue = 0.0f;
+         // else
+         //    guitarSynthState->lastOutputValue = 0.0f;
 
          guitarSynthState->thisWaveLoudness = 0.0;
          guitarSynthState->samplesSinceLastWave = 0;
