@@ -100,7 +100,11 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       if ((guitarSynthState->lastInputValue >= 0.0 && guitarSynthState->rising <= 0.0) ||
       (guitarSynthState->lastInputValue <= 0.0 && guitarSynthState->rising >= 0.0))
       {
-         guitarSynthState->lastOutputValue = 0.0f;
+         if (guitarSynthState->lastOutputValue > 0.0f)
+            guitarSynthState->lastOutputValue = -guitarSynthState->lastOutputValue;
+         else
+            guitarSynthState->lastOutputValue = 0.0f;
+
          guitarSynthState->thisWaveLoudness = 0.0;
          guitarSynthState->samplesSinceLastWave = 0;
       }
@@ -114,10 +118,10 @@ static void run(LV2_Handle instance, uint32_t n_samples)
          maximum = 5.0 * guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave);
          if (fabs(guitarSynthState->lastOutputValue) > fabs(maximum))
          {
-            // guitarSynthState->lastOutputValue = maximum;
+            //guitarSynthState->lastOutputValue = maximum;
          }
          else 
-            guitarSynthState->lastOutputValue = fmax(-1.0, fmin(1.0, guitarSynthState->lastOutputValue + guitarSynthState->rising));
+            guitarSynthState->lastOutputValue = fmax(-1.0, fmin(1.0, guitarSynthState->lastOutputValue + fabs(guitarSynthState->rising)));
       }
 
       output[pos] = guitarSynthState->lastOutputValue;
