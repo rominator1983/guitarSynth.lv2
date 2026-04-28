@@ -19,15 +19,14 @@ typedef struct
 {
    // Port buffers
    const float *gain;
-   const float *threshold;
    const float *input;
    float *output;
-   float rising;
-   float lastOutputValue;
-   float lastInputValue;
-   double thisWaveLoudness;
-   unsigned long samplesSinceLastWave;
-   float rateAndGainCompensation;
+   // State
+   int32_t lastZeroCrossing; // offset from end of buffer to last zero-crossing
+   int32_t previousLastZeroCrossing; // offset from end of buffer to last zero-crossing
+   float last_input;
+   float rate;
+   double lastHalfwaveSum;
 } GuitarSynthState;
 
 static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
@@ -36,12 +35,7 @@ static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
             const LV2_Feature *const *features)
 {
    GuitarSynthState *guitarSynthState = (GuitarSynthState *)calloc(1, sizeof(GuitarSynthState));
-
-   guitarSynthState->rising = 0.0f;
-   guitarSynthState->lastOutputValue = 0.0f;
-   guitarSynthState->thisWaveLoudness = 0.0f;
-   guitarSynthState->samplesSinceLastWave = 0;
-   guitarSynthState->rateAndGainCompensation = 0.01f * (48000.0f / (float)rate);
+   guitarSynthState->rate = rate;
 
    return (LV2_Handle)guitarSynthState;
 }
@@ -54,9 +48,6 @@ static void connect_port(LV2_Handle instance, uint32_t port, void *data)
    {
       case GAIN:
          guitarSynthState->gain = (const float *)data;
-         break;
-      case THRESHOLD:
-         guitarSynthState->threshold = (const float *)data;
          break;
       case INPUT:
          guitarSynthState->input = (const float *)data;
@@ -72,7 +63,9 @@ static void activate(LV2_Handle instance)
   GuitarSynthState *guitarSynthState = (GuitarSynthState *)instance;
 }
 
-static float calcMultiplicator(GuitarSynthState *guitarSynthState);
+static double calculateLoudness(GuitarSynthState *guitarSynthState, uint32_t pos);
+
+static void resetAfterCrossing(GuitarSynthState *guitarSynthState, uint32_t pos);
 
 static void run(LV2_Handle instance, uint32_t n_samples)
 {
@@ -80,60 +73,84 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 
    const float *const input = guitarSynthState->input;
    float *const output = guitarSynthState->output;
-
-   // TODO: add square wave function output based on a new mode. This should also be based on input loudness.
    
-   // TODO: Maybe add a second mode for describing how loudness is calculated. Use some form of RMS?
-   //   Do this based on a new mode. That determines wether to do this.
-   //   If this is not done, the output will be constant maximum noise. This is basically how VCOs work anyhow.
+   double halfwaveLoudness;
+   double length;
 
-   double maximum = 0.0;
+   guitarSynthState->lastZeroCrossing = guitarSynthState->lastZeroCrossing - n_samples;
+   guitarSynthState->previousLastZeroCrossing = guitarSynthState->previousLastZeroCrossing - n_samples;
 
-   // kind of saw-tooth for upper/lower
    for (uint32_t pos = 0; pos < n_samples; pos++)
    {
-      float multiplicator = fmax(multiplicator, calcMultiplicator(guitarSynthState));
-      guitarSynthState->rising = input[pos] >= 0.0 ? multiplicator : (-multiplicator);
-      
-      float absInputValue = fabs(input[pos]);
-      
-      if ((guitarSynthState->lastInputValue >= 0.0 && guitarSynthState->rising <= 0.0) ||
-      (guitarSynthState->lastInputValue <= 0.0 && guitarSynthState->rising >= 0.0))
-      {
-         if (guitarSynthState->lastOutputValue > 0.0f)
-            guitarSynthState->lastOutputValue = -guitarSynthState->lastOutputValue;
-         // else
-         //    guitarSynthState->lastOutputValue = 0.0f;
+      bool crossed_up = (input[pos] >= 0.0f && guitarSynthState->last_input < 0.0f);
+      bool crossed_down = (input[pos] < 0.0f && guitarSynthState->last_input >= 0.0f);
 
-         guitarSynthState->thisWaveLoudness = 0.0;
-         guitarSynthState->samplesSinceLastWave = 0;
-      }
-      else
+      if (crossed_up)
       {
-         // NOTE: calculation of loudness based on average
-         guitarSynthState->thisWaveLoudness = guitarSynthState->thisWaveLoudness + (double)input[pos];
-         guitarSynthState->samplesSinceLastWave++;
+         halfwaveLoudness = calculateLoudness(guitarSynthState, pos);
+         // use a minimum of 10 to avoid division by zero.
+         length = fmax(10, pos - guitarSynthState->lastZeroCrossing);
 
-         // TODO: adjust factor for maximum value to sweet spot?
-         maximum = 5.0 * guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave);
-         if (fabs(guitarSynthState->lastOutputValue) > fabs(maximum))
+         for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i < pos; i++)
          {
-            //guitarSynthState->lastOutputValue = maximum;
+            output[i] = halfwaveLoudness * (double)(length - (i - guitarSynthState->lastZeroCrossing)) / length;
          }
-         else 
-            guitarSynthState->lastOutputValue = fmax(-1.0, fmin(1.0, guitarSynthState->lastOutputValue + fabs(guitarSynthState->rising)));
+
+         resetAfterCrossing(guitarSynthState, pos);
+      }
+      else if (crossed_down)
+      {
+         halfwaveLoudness = calculateLoudness(guitarSynthState, pos);
+         length = pos - guitarSynthState->lastZeroCrossing;
+         
+         for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i < pos; i++)
+         {
+            output[i] = halfwaveLoudness * (double)(i - guitarSynthState->lastZeroCrossing) / length;
+         }
+         resetAfterCrossing(guitarSynthState, pos);
       }
 
-      output[pos] = guitarSynthState->lastOutputValue;
-      guitarSynthState->lastInputValue = input[pos];
+      guitarSynthState->lastHalfwaveSum += (double)input[pos];
+      guitarSynthState->last_input = input[pos];
    }
+   
+   // do prediction for the rest of the buffer (or all of the buffer if there was no crossing).
+   // use a minimum of 10 to avoid division by zero.
+   length = fmax(10,
+      fmax(
+      guitarSynthState->lastZeroCrossing - guitarSynthState->previousLastZeroCrossing
+      ,n_samples - guitarSynthState->lastZeroCrossing));
+   
+   halfwaveLoudness = guitarSynthState->lastHalfwaveSum * 2.0 / (double)((int32_t)n_samples - guitarSynthState->lastZeroCrossing);
+
+   for (uint32_t pos = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; pos < n_samples; pos++)
+   {
+      if (input[n_samples - 1] >= 0.0f)
+         output[pos] = fmax((float)(halfwaveLoudness * (double)(pos - guitarSynthState->lastZeroCrossing) / (double)length), 0.0f);
+      else
+         output[pos] = fmin((float)(halfwaveLoudness * (double)(length - (pos - guitarSynthState->lastZeroCrossing)) / (double)length), 0.0f);
+   }
+
+   // simple gain control with clipping
+   for (uint32_t pos = 0; pos < n_samples; pos++)
+      output[pos] = fmax(-1.0f, fmin(1.0f, output[pos] * (*guitarSynthState->gain)));
 }
 
-float calcMultiplicator(GuitarSynthState *guitarSynthState)
+void resetAfterCrossing(GuitarSynthState *guitarSynthState, uint32_t pos)
 {
-   return *(guitarSynthState->gain) * 
-      fabs(guitarSynthState->thisWaveLoudness / (double)(guitarSynthState->samplesSinceLastWave)) * 
-      guitarSynthState->rateAndGainCompensation;
+   guitarSynthState->previousLastZeroCrossing = guitarSynthState->lastZeroCrossing;
+   guitarSynthState->lastZeroCrossing = pos;
+   guitarSynthState->lastHalfwaveSum = 0.0;
+}
+
+double calculateLoudness(GuitarSynthState *guitarSynthState, uint32_t pos)
+{
+   // the area of the triangle shall be the same as the area of the halfwave. So the height of the triangle is 2 times the average.
+   float loudness = guitarSynthState->lastHalfwaveSum * 2.0 / (double)(pos - guitarSynthState->lastZeroCrossing);
+
+   // clipping does not make sense here.
+   // return fmax(-1.0f, fmin(1.0f, loudness));
+   return loudness;
 }
 
 static void deactivate(LV2_Handle instance)
