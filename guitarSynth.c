@@ -119,7 +119,8 @@ static void run(LV2_Handle instance, uint32_t n_samples)
 
          if (guitarSynthState->lastZeroCrossing >= 0)
          {
-            length = pos - guitarSynthState->lastZeroCrossing;
+            // use a minimum of 5 to avoid division by zero.
+            length = fmax(5, pos - guitarSynthState->lastZeroCrossing);
             
             for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i <= pos; i++)
             {
@@ -128,7 +129,8 @@ static void run(LV2_Handle instance, uint32_t n_samples)
          }
          else
          {
-            length = pos;
+            // use a minimum of 5 to avoid division by zero.
+            length = fmax(5, pos);
             
             for (uint32_t i = 0; i <= pos; i++)
             {
