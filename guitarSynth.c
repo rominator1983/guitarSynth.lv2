@@ -25,6 +25,7 @@ typedef struct
    int32_t lastZeroCrossing; // offset from end of buffer to last zero-crossing
    int32_t previousLastZeroCrossing; // offset from end of buffer to last zero-crossing
    float last_input;
+   float last_output;
    float rate;
    double lastHalfwaveSum;
 } GuitarSynthState;
@@ -88,24 +89,53 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       if (crossed_up)
       {
          halfwaveLoudness = calculateLoudness(guitarSynthState, pos);
-         // use a minimum of 10 to avoid division by zero.
-         length = fmax(10, pos - guitarSynthState->lastZeroCrossing);
-
-         for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i < pos; i++)
+         if (guitarSynthState->lastZeroCrossing >= 0)
          {
-            output[i] = halfwaveLoudness * (double)(length - (i - guitarSynthState->lastZeroCrossing)) / length;
+            // use a minimum of 5 to avoid division by zero.
+            length = fmax(5, pos - guitarSynthState->lastZeroCrossing);
+            
+            for (uint32_t i = guitarSynthState->lastZeroCrossing + 1; i <= pos; i++)
+            {
+               output[i] = halfwaveLoudness * (double)(length - (i - guitarSynthState->lastZeroCrossing)) / length;
+            }
          }
-
+         else
+         {
+            // use a minimum of 5 to avoid division by zero.
+            length = fmax(5, pos);
+            halfwaveLoudness = guitarSynthState->last_output;
+            
+            for (uint32_t i = 0; i <= pos; i++)
+            {
+               output[i] = halfwaveLoudness * (double)(length - i) / length;
+            }
+         }
+         
          resetAfterCrossing(guitarSynthState, pos);
       }
       else if (crossed_down)
       {
          halfwaveLoudness = calculateLoudness(guitarSynthState, pos);
-         length = pos - guitarSynthState->lastZeroCrossing;
-         
-         for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i < pos; i++)
+
+         if (guitarSynthState->lastZeroCrossing >= 0)
          {
-            output[i] = halfwaveLoudness * (double)(i - guitarSynthState->lastZeroCrossing) / length;
+            length = pos - guitarSynthState->lastZeroCrossing;
+            
+            for (uint32_t i = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; i <= pos; i++)
+            {
+               output[i] = halfwaveLoudness * (double)(i - guitarSynthState->lastZeroCrossing) / length;
+            }
+         }
+         else
+         {
+            length = pos;
+            
+            for (uint32_t i = 0; i <= pos; i++)
+            {
+               output[i] =
+                  (halfwaveLoudness * (double)(i) / length +
+                   guitarSynthState->last_output * (double)(length - i) / length );
+            }
          }
          resetAfterCrossing(guitarSynthState, pos);
       }
@@ -113,27 +143,45 @@ static void run(LV2_Handle instance, uint32_t n_samples)
       guitarSynthState->lastHalfwaveSum += (double)input[pos];
       guitarSynthState->last_input = input[pos];
    }
-   
-   // do prediction for the rest of the buffer (or all of the buffer if there was no crossing).
-   // use a minimum of 10 to avoid division by zero.
-   length = fmax(10,
-      fmax(
-      guitarSynthState->lastZeroCrossing - guitarSynthState->previousLastZeroCrossing
-      ,n_samples - guitarSynthState->lastZeroCrossing));
-   
-   halfwaveLoudness = guitarSynthState->lastHalfwaveSum * 2.0 / (double)((int32_t)n_samples - guitarSynthState->lastZeroCrossing);
 
-   for (uint32_t pos = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; pos < n_samples; pos++)
-   {
-      if (input[n_samples - 1] >= 0.0f)
-         output[pos] = fmax((float)(halfwaveLoudness * (double)(pos - guitarSynthState->lastZeroCrossing) / (double)length), 0.0f);
-      else
-         output[pos] = fmin((float)(halfwaveLoudness * (double)(length - (pos - guitarSynthState->lastZeroCrossing)) / (double)length), 0.0f);
-   }
+   // if (guitarSynthState->lastZeroCrossing >= 0)
+   // {
+      // do prediction for the rest of the buffer (or all of the buffer if there was no crossing).
+      // use a minimum of 10 to avoid division by zero.
+      length = fmax(10,
+         fmax(
+         guitarSynthState->lastZeroCrossing - guitarSynthState->previousLastZeroCrossing
+         ,n_samples - guitarSynthState->lastZeroCrossing));
+      
+      halfwaveLoudness = guitarSynthState->lastHalfwaveSum * 2.0 / (double)((int32_t)n_samples - guitarSynthState->lastZeroCrossing);
+
+      for (uint32_t pos = guitarSynthState->lastZeroCrossing < 0 ? 0 : guitarSynthState->lastZeroCrossing; pos < n_samples; pos++)
+      {
+         if (input[n_samples - 1] >= 0.0f)
+            output[pos] = fmax((float)(halfwaveLoudness * (double)(pos - guitarSynthState->lastZeroCrossing) / (double)length), 0.0f);
+         else
+            output[pos] = fmin((float)(halfwaveLoudness * (double)(length - (pos - guitarSynthState->lastZeroCrossing)) / (double)length), 0.0f);
+      }
+   // }
+   // else
+   // {
+   //    halfwaveLoudness = calculateLoudness(guitarSynthState, n_samples - 1) / 2.0;
+   //    length = n_samples;
+            
+   //    for (uint32_t i = 0; i < n_samples; i++)
+   //    {
+   //       output[i] =
+   //          halfwaveLoudness * (double)(i) / (length - 1) +
+   //          guitarSynthState->last_output * (double)(length - i) / (length - 1);
+   //    }
+   // }
+
 
    // simple gain control with clipping
    for (uint32_t pos = 0; pos < n_samples; pos++)
       output[pos] = fmax(-1.0f, fmin(1.0f, output[pos] * (*guitarSynthState->gain)));
+
+   guitarSynthState->last_output = output[n_samples - 1];
 }
 
 void resetAfterCrossing(GuitarSynthState *guitarSynthState, uint32_t pos)
